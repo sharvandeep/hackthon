@@ -1,7 +1,7 @@
 import { useState } from "react";
 
 function App({ onLogin, onRegisterStudent, loginError, clearLoginError }) {
-  const [role, setRole] = useState("student"); // keep role state but use only student for now
+  const [role, setRole] = useState("student"); // "student" | "faculty"
   const [view, setView] = useState("login"); // "login" | "register"
 
   // Login fields
@@ -35,25 +35,22 @@ function App({ onLogin, onRegisterStudent, loginError, clearLoginError }) {
   };
 
   const switchRole = (newRole) => {
-    // we keep UI but only student actually works
     setRole(newRole);
     resetLoginFields();
     if (clearLoginError) clearLoginError();
+    setView("login");
   };
 
   const handleLoginSubmit = (e) => {
     e.preventDefault();
 
     if (!userId || !password) {
-      alert("Please enter Student ID and password");
+      alert("Please enter ID and password");
       return;
     }
 
     if (clearLoginError) clearLoginError();
-
-    if (onLogin) {
-      onLogin(role, userId, password); // role will be "student"
-    }
+    onLogin(role, userId, password);
   };
 
   const handleRegisterSubmit = (e) => {
@@ -64,16 +61,14 @@ function App({ onLogin, onRegisterStudent, loginError, clearLoginError }) {
       return;
     }
 
-    if (onRegisterStudent) {
-      onRegisterStudent({
-        name: regName,
-        studentId: regStudentId,
-        email: regEmail,
-        department: regDept,
-        year: regYear,
-        password: regPassword,
-      });
-    }
+    onRegisterStudent({
+      name: regName,
+      studentId: regStudentId,
+      email: regEmail,
+      department: regDept,
+      year: regYear,
+      password: regPassword,
+    });
 
     resetRegisterFields();
     resetLoginFields();
@@ -90,7 +85,7 @@ function App({ onLogin, onRegisterStudent, loginError, clearLoginError }) {
       <main className="card-wrapper">
         {view === "login" ? (
           <div className="auth-card">
-            {/* Role Toggle (only Student really works) */}
+            {/* Role Selector */}
             <div className="role-toggle">
               <button
                 type="button"
@@ -108,19 +103,20 @@ function App({ onLogin, onRegisterStudent, loginError, clearLoginError }) {
               </button>
             </div>
 
+            {/* Role text */}
             <div className="role-description">
-              <div className={`role-text ${isStudent ? "highlight" : ""}`}>
-                <p>Login to manage your projects</p>
-              </div>
-              <div className={`role-text ${!isStudent ? "highlight" : ""}`}>
-                <p>(Demo) Faculty login not yet enabled</p>
-              </div>
+              <p className={isStudent ? "highlight" : ""}>
+                Manage your projects & milestones
+              </p>
+              <p className={!isStudent ? "highlight" : ""}>
+                Review student submissions
+              </p>
             </div>
 
-            {/* LOGIN FORM */}
+            {/* Login Form */}
             <form className="login-form" onSubmit={handleLoginSubmit}>
               <label className="field-label">
-                Student ID
+                {isStudent ? "Student ID" : "Faculty ID"}
                 <input
                   className="input-field"
                   type="text"
@@ -148,23 +144,34 @@ function App({ onLogin, onRegisterStudent, loginError, clearLoginError }) {
 
             {loginError && <p className="error-text">{loginError}</p>}
 
-            <p className="register-text">
-              New here?{" "}
-              <button
-                type="button"
-                className="link-btn"
-                onClick={() => {
-                  resetLoginFields();
-                  resetRegisterFields();
-                  if (clearLoginError) clearLoginError();
-                  setView("register");
-                }}
-              >
-                Register as Student
-              </button>
-            </p>
+            {/* Register Link only for students */}
+            {isStudent && (
+              <p className="register-text">
+                New here?{" "}
+                <button
+                  type="button"
+                  className="link-btn"
+                  onClick={() => {
+                    resetLoginFields();
+                    resetRegisterFields();
+                    if (clearLoginError) clearLoginError();
+                    setView("register");
+                  }}
+                >
+                  Register as Student
+                </button>
+              </p>
+            )}
+
+            {/* Faculty Login Hint */}
+            {!isStudent && (
+              <p className="register-text">
+                Use: <b>faculty1</b> / <b>123@faculty</b>
+              </p>
+            )}
           </div>
         ) : (
+          // REGISTER STUDENT PAGE
           <div className="auth-card">
             <h2 className="form-title">Student Registration</h2>
 

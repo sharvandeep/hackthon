@@ -26,32 +26,39 @@ const StudentDashboard = ({ user, onLogout }) => {
   // Projects state
   const [projects, setProjects] = useState([]);
 
-  // Load projects for this student
+  // Flag to know when initial load from localStorage is done
+  const [hasLoadedProjects, setHasLoadedProjects] = useState(false);
+
+  // Load projects for this student (runs when studentId changes)
   useEffect(() => {
     if (!studentId) return;
+
     const key = `projects_${studentId}`;
     try {
       const raw = localStorage.getItem(key);
       if (raw) {
         setProjects(JSON.parse(raw));
       } else {
-        setProjects([]);
+        setProjects([]); // no data yet, start empty
       }
     } catch {
       setProjects([]);
     }
+
+    setHasLoadedProjects(true);
   }, [studentId]);
 
-  // Save projects when they change
+  // Save projects when they change (only AFTER initial load)
   useEffect(() => {
-    if (!studentId) return;
+    if (!studentId || !hasLoadedProjects) return;
+
     const key = `projects_${studentId}`;
     try {
       localStorage.setItem(key, JSON.stringify(projects));
     } catch {
       // ignore
     }
-  }, [projects, studentId]);
+  }, [projects, studentId, hasLoadedProjects]);
 
   const [selectedProjectId, setSelectedProjectId] = useState(null);
   const [editingProjectId, setEditingProjectId] = useState(null);

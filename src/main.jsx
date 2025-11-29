@@ -3,9 +3,10 @@ import ReactDOM from "react-dom/client";
 import "./index.css";
 import App from "./App.jsx";
 import StudentDashboard from "./StudentDashboard.jsx";
+import FacultyDashboard from "./FacultyDashboard.jsx";
 
 function Root() {
-  // Logged-in user: null or { role: "student", id, name }
+  // Logged-in user: null or { role: "student" | "faculty", id, name }
   const [user, setUser] = useState(null);
 
   // All registered students (persistent)
@@ -29,17 +30,28 @@ function Root() {
 
   const [loginError, setLoginError] = useState("");
 
-  // Register student (no uniqueness checks, to keep it simple & robust)
-  const handleRegisterStudent = (studentData) => {
-    setStudents((prev) => [...prev, studentData]);
+  // One faculty account (as you specified)
+  const facultyAccounts = [
+    { id: "faculty1", password: "123@faculty", name: "Faculty 1" },
+  ];
+
+  // Register a new student (called from App)
+  const handleRegisterStudent = (newStudent) => {
+    // newStudent should be an object: { studentId, password, name }
     setLoginError("");
-    alert("Registration successful! You can now login with your Student ID and password.");
+    setStudents((prev) => {
+      if (prev.find((s) => s.studentId === newStudent.studentId)) {
+        setLoginError("Student ID already registered");
+        return prev;
+      }
+      return [...prev, newStudent];
+    });
   };
 
-  // Login with Student ID + password only
   const handleLogin = (role, id, password) => {
     setLoginError("");
 
+    // STUDENT LOGIN
     if (role === "student") {
       const match = students.find(
         (s) => s.studentId === id && s.password === password
@@ -52,15 +64,32 @@ function Root() {
 
       setUser({
         role: "student",
-        id: match.studentId, // used for localStorage key
+        id: match.studentId,
         name: match.name,
       });
 
       return;
     }
 
-    // Faculty: (optional) just show error for now
-    setLoginError("Faculty login not implemented in this demo.");
+    // FACULTY LOGIN
+    if (role === "faculty") {
+      const match = facultyAccounts.find(
+        (f) => f.id === id && f.password === password
+      );
+
+      if (!match) {
+        setLoginError("Invalid Faculty ID or Password");
+        return;
+      }
+
+      setUser({
+        role: "faculty",
+        id: match.id,
+        name: match.name,
+      });
+
+      return;
+    }
   };
 
   const handleLogout = () => {
@@ -83,6 +112,11 @@ function Root() {
   // Student logged in
   if (user.role === "student") {
     return <StudentDashboard user={user} onLogout={handleLogout} />;
+  }
+
+  // Faculty logged in
+  if (user.role === "faculty") {
+    return <FacultyDashboard user={user} onLogout={handleLogout} />;
   }
 
   return null;
