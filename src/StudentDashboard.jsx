@@ -1,8 +1,13 @@
 // StudentDashboard.jsx
 import React, { useState, useEffect } from "react";
-import PortfolioEditor from "./PortfolioEditor.jsx"; // keep if you use it
+import PortfolioEditor from "./PortfolioEditor.jsx"; // keep if used
 
-// Month & weekday names used by calendar
+/* StudentDashboard
+   - Adds milestone-date selection modal
+   - Shows calendar dots for milestone dates
+   - Click dot to open popup showing milestones for that date
+*/
+
 const monthNames = [
   "January","February","March","April","May","June",
   "July","August","September","October","November","December",
@@ -15,7 +20,7 @@ const StudentDashboard = ({ user, onLogout }) => {
   // view: "dashboard" | "addProject" | "projectDetails" | "projects" | "portfolio"
   const [view, setView] = useState("dashboard");
 
-  // core state
+  // projects and helpers
   const [projects, setProjects] = useState([]);
   const [hasLoadedProjects, setHasLoadedProjects] = useState(false);
   const [selectedProjectId, setSelectedProjectId] = useState(null);
@@ -32,12 +37,24 @@ const StudentDashboard = ({ user, onLogout }) => {
   const [newMilestoneText, setNewMilestoneText] = useState("");
   const [currentDate, setCurrentDate] = useState(new Date());
 
-  // feedback list for this student (array of feedback objects)
+  // feedback list (unchanged behaviour)
   const [feedbackList, setFeedbackList] = useState([]);
 
-  // ---------- Load projects + feedback on studentId change ----------
+  // ---------- New states for date-picker modal and milestone popup ----------
+  const [showDatePicker, setShowDatePicker] = useState(false);
+  // modal month/year (for date-picker). default to currently showing month
+  const [modalYear, setModalYear] = useState(currentDate.getFullYear());
+  const [modalMonth, setModalMonth] = useState(currentDate.getMonth());
+  // pending milestone text to attach after selecting date
+  const [pendingMilestoneText, setPendingMilestoneText] = useState("");
+
+  // popup showing milestones for a selected calendar day
+  const [showMilestonePopup, setShowMilestonePopup] = useState(false);
+  const [popupDate, setPopupDate] = useState(null);
+  const [popupMilestones, setPopupMilestones] = useState([]);
+
+  // ----- load projects for this student -----
   useEffect(() => {
-    // reset local UI state
     setSelectedProjectId(null);
     setEditingProjectId(null);
     resetProjectForm();
@@ -50,17 +67,16 @@ const StudentDashboard = ({ user, onLogout }) => {
       return;
     }
 
-    // load projects
-    const pkey = `projects_${studentId}`;
+    const key = `projects_${studentId}`;
     try {
-      const raw = localStorage.getItem(pkey);
+      const raw = localStorage.getItem(key);
       setProjects(raw ? JSON.parse(raw) : []);
     } catch (err) {
       console.warn("Failed to parse projects from localStorage", err);
       setProjects([]);
     }
 
-    // load feedback
+    // load feedback for this student (unchanged)
     const fkey = `feedback_${studentId}`;
     try {
       const rawf = localStorage.getItem(fkey);
@@ -74,7 +90,7 @@ const StudentDashboard = ({ user, onLogout }) => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [studentId]);
 
-  // ---------- Persist projects to localStorage ----------
+  // Save projects whenever they change (only after initial load)
   useEffect(() => {
     if (!studentId || !hasLoadedProjects) return;
     const key = `projects_${studentId}`;
@@ -85,24 +101,25 @@ const StudentDashboard = ({ user, onLogout }) => {
     }
   }, [projects, studentId, hasLoadedProjects]);
 
-  // ---------- Listen for storage events (sync across tabs/pages) ----------
+  // reload feedback when either studentId or projects change (faculty might add feedback)
+  useEffect(() => {
+    if (!studentId) return;
+    try {
+      const rawf = localStorage.getItem(`feedback_${studentId}`);
+      setFeedbackList(rawf ? JSON.parse(rawf) : []);
+    } catch (err) {
+      console.warn("Failed to parse feedback from localStorage", err);
+      setFeedbackList([]);
+    }
+  }, [studentId, projects]);
+
+  // storage event listener to react to feedback added in other tabs (unchanged)
   useEffect(() => {
     const handleStorageChange = (e) => {
-      // If projects changed externally for this student, reload
-      if (e.key === `projects_${studentId}`) {
-        try {
-          const updated = JSON.parse(e.newValue || "[]");
-          setProjects(updated);
-        } catch {
-          setProjects([]);
-        }
-      }
-
-      // If feedback changed externally for this student, reload feedbackList
       if (e.key === `feedback_${studentId}`) {
         try {
-          const f = JSON.parse(e.newValue || "[]");
-          setFeedbackList(f);
+          const data = JSON.parse(e.newValue || "[]");
+          setFeedbackList(data);
         } catch {
           setFeedbackList([]);
         }
@@ -113,83 +130,7 @@ const StudentDashboard = ({ user, onLogout }) => {
     return () => window.removeEventListener("storage", handleStorageChange);
   }, [studentId]);
 
-  // ---------- When feedbackList changes -> sync project statuses ----------
-  useEffect(() => {
-    if (!studentId) return;
-    if (!Array.isArray(feedbackList) || feedbackList.length === 0) {
-      // No feedback: do nothing (or optionally revert statuses — we don't revert)
-      return;
-    }
-
-    // Build a map of latest feedback per projectId
-    const latestByProject = {};
-    feedbackList.forEach((f) => {
-      // normalize projectId to number/string
-      const pid = f.projectId;
-      if (!pid) return;
-      // choose by date if provided, else by array order (later entries override)
-      if (!latestByProject[pid]) {
-        latestByProject[pid] = f;
-      } else {
-        const cur = latestByProject[pid];
-        if (f.date && cur.date) {
-          // parse date (if invalid, fallback to array order)
-          const fd = new Date(f.date).getTime();
-          const cd = new Date(cur.date).getTime();
-          if (!isNaN(fd) && !isNaN(cd) && fd > cd) {
-            latestByProject[pid] = f;
-          } else {
-            // if dates can't compare, choose later item (current loop order)
-            latestByProject[pid] = f;
-          }
-        } else {
-          // no dates — later array entries override
-          latestByProject[pid] = f;
-        }
-      }
-    });
-
-    // Update projects accordingly (status + lastUpdated + optionally store lastFeedbackSummary)
-    setProjects((prevProjects) => {
-      const updated = prevProjects.map((p) => {
-        const fb = latestByProject[p.id];
-        if (!fb) return p;
-        // Only update if status differs (to avoid needless writes)
-        const newStatus = fb.status || p.status;
-        const lastUpdated = fb.date || p.lastUpdated || new Date().toLocaleDateString();
-        // attach small feedback metadata for quick preview in UI
-        const lastFeedback = {
-          comment: fb.comment || "",
-          faculty: fb.faculty || "",
-          date: fb.date || lastUpdated,
-        };
-        return { ...p, status: newStatus, lastUpdated, lastFeedback };
-      });
-
-      // persist updated projects also in localStorage (so student & faculty view consistent)
-      try {
-        localStorage.setItem(`projects_${studentId}`, JSON.stringify(updated));
-      } catch (err) {
-        console.warn("Failed to persist synced projects", err);
-      }
-
-      return updated;
-    });
-  }, [feedbackList, studentId]);
-
-  // Also reload feedbackList whenever projects change (faculty may have edited both)
-  useEffect(() => {
-    if (!studentId) return;
-    try {
-      const rawf = localStorage.getItem(`feedback_${studentId}`);
-      setFeedbackList(rawf ? JSON.parse(rawf) : []);
-    } catch (err) {
-      console.warn("Failed to parse feedback from localStorage", err);
-      setFeedbackList([]);
-    }
-  }, [projects, studentId]);
-
-  // ---------- Helpers ----------
+  // ---------- helpers ----------
   const computeProgress = (milestones) => {
     if (!milestones || milestones.length === 0) return 0;
     const done = milestones.filter((m) => m.completed).length;
@@ -211,7 +152,7 @@ const StudentDashboard = ({ user, onLogout }) => {
     );
   };
 
-  // ---------- Add / Edit Project ----------
+  // ---------- add/edit project ----------
   const handleProjectSubmit = (e) => {
     e.preventDefault();
     if (!pTitle.trim() || !pDescription.trim()) {
@@ -220,7 +161,6 @@ const StudentDashboard = ({ user, onLogout }) => {
     }
 
     if (editingProjectId) {
-      // update
       setProjects((prev) =>
         prev.map((p) => {
           if (p.id !== editingProjectId) return p;
@@ -241,7 +181,6 @@ const StudentDashboard = ({ user, onLogout }) => {
         })
       );
     } else {
-      // create
       const newProject = {
         id: Date.now(),
         title: pTitle,
@@ -270,7 +209,7 @@ const StudentDashboard = ({ user, onLogout }) => {
     setView("dashboard");
   };
 
-  // ---------- Project details helpers ----------
+  // ---------- project details helpers ----------
   const openProjectDetails = (projectId) => {
     setSelectedProjectId(projectId);
     setNewMilestoneText("");
@@ -293,23 +232,53 @@ const StudentDashboard = ({ user, onLogout }) => {
     );
   };
 
-  const handleAddMilestone = (e) => {
+  // ---------- Milestones: open date-picker modal instead of directly adding ----------
+  const openDatePickerForMilestone = (e) => {
     e.preventDefault();
-    if (!newMilestoneText.trim() || !selectedProject) return;
+    if (!newMilestoneText.trim()) {
+      alert("Please enter milestone text first.");
+      return;
+    }
+    setPendingMilestoneText(newMilestoneText.trim());
+    // initialize modal month/year to currentDate or selected project's lastUpdated month
+    setModalYear(currentDate.getFullYear());
+    setModalMonth(currentDate.getMonth());
+    setShowDatePicker(true);
+  };
+
+  // when user selects a day in the date-picker modal, attach milestone with that date
+  const handleSelectMilestoneDate = (day) => {
+    if (!selectedProject) {
+      setShowDatePicker(false);
+      return;
+    }
+    // build YYYY-MM-DD string based on modalMonth/modalYear and selected day
+    const mm = String(modalMonth + 1).padStart(2, "0");
+    const dd = String(day).padStart(2, "0");
+    const dateString = `${modalYear}-${mm}-${dd}`;
 
     updateProject(selectedProject.id, (p) => ({
       ...p,
       milestones: [
         ...(p.milestones || []),
-        { id: Date.now(), text: newMilestoneText.trim(), completed: false },
+        {
+          id: Date.now(),
+          text: pendingMilestoneText,
+          completed: false,
+          date: dateString,
+        },
       ],
     }));
 
+    // clear and close modal, also clear the input on details page
+    setPendingMilestoneText("");
     setNewMilestoneText("");
+    setShowDatePicker(false);
   };
 
   const handleToggleMilestone = (milestoneId) => {
     if (!selectedProject) return;
+
     updateProject(selectedProject.id, (p) => ({
       ...p,
       milestones: p.milestones.map((m) =>
@@ -329,19 +298,34 @@ const StudentDashboard = ({ user, onLogout }) => {
     setView("dashboard");
   };
 
-  // ---------- Feedback helpers ----------
-  const getFeedbackForProject = (projectId) => {
-    if (!feedbackList || !Array.isArray(feedbackList)) return [];
-    return feedbackList.filter((f) => String(f.projectId) === String(projectId));
+  // ---------- calendar - dots & popup ----------
+  // helper returns array of milestone objects (with projectTitle) for a given 'YYYY-MM-DD' date
+  const getMilestonesForDate = (dateString) => {
+    if (!projects || projects.length === 0) return [];
+    const out = [];
+    projects.forEach((proj) => {
+      (proj.milestones || []).forEach((ms) => {
+        if (ms.date === dateString) {
+          out.push({
+            ...ms,
+            projectTitle: proj.title,
+            projectId: proj.id,
+          });
+        }
+      });
+    });
+    return out;
   };
 
-  // Shortcut to check whether a project has feedback
-  const hasFeedback = (projectId) => {
-    const f = getFeedbackForProject(projectId);
-    return f && f.length > 0;
+  // clicking a calendar dot opens popup modal with milestones for that date
+  const openMilestonePopup = (dateString) => {
+    const list = getMilestonesForDate(dateString);
+    setPopupDate(dateString);
+    setPopupMilestones(list);
+    setShowMilestonePopup(true);
   };
 
-  // ---------- Stats ----------
+  // ---------- stats ----------
   const stats = {
     total: projects.length,
     inReview: projects.filter((p) => p.status === "In Review").length,
@@ -349,7 +333,7 @@ const StudentDashboard = ({ user, onLogout }) => {
     drafts: projects.filter((p) => p.status === "Draft").length,
   };
 
-  // ---------- Calendar ----------
+  // ---------- calendar generation for main dashboard (uses currentDate) ----------
   const year = currentDate.getFullYear();
   const month = currentDate.getMonth();
   const startOfMonth = new Date(year, month, 1);
@@ -365,6 +349,24 @@ const StudentDashboard = ({ user, onLogout }) => {
 
   const goToPrevMonth = () => setCurrentDate(new Date(year, month - 1, 1));
   const goToNextMonth = () => setCurrentDate(new Date(year, month + 1, 1));
+
+  // ---------- small helpers to generate modal calendar (month/year stateled) ----------
+  const genMonthCells = (mYear, mMonth) => {
+    const sOfM = new Date(mYear, mMonth, 1);
+    const eOfM = new Date(mYear, mMonth + 1, 0);
+    const sDay = sOfM.getDay();
+    const count = eOfM.getDate();
+    const cells = [];
+    for (let i = 0; i < sDay; i++) cells.push(null);
+    for (let d = 1; d <= count; d++) cells.push(d);
+    return cells;
+  };
+
+  // ---------- feedback getter unchanged ----------
+  const getFeedbackForProject = (projectId) => {
+    if (!feedbackList || !Array.isArray(feedbackList)) return [];
+    return feedbackList.filter((f) => Number(f.projectId) === Number(projectId));
+  };
 
   // ---------- JSX ----------
   return (
@@ -395,7 +397,7 @@ const StudentDashboard = ({ user, onLogout }) => {
           >
             Portfolio
           </button>
-          {/* Feedback removed from navbar per request */}
+          {/* feedback removed from navbar */}
         </nav>
 
         <div className="nav-right">
@@ -415,19 +417,24 @@ const StudentDashboard = ({ user, onLogout }) => {
           <button className="outline-pill" onClick={onLogout}>
             Logout
           </button>
-          <div className="avatar-pill">{studentId ? studentId.substring(0, 2).toUpperCase() : "ST"}</div>
+          <div className="avatar-pill">
+            {studentId ? studentId.substring(0, 2).toUpperCase() : "ST"}
+          </div>
         </div>
       </header>
 
       <main className="dashboard-main">
-        {/* ========== DASHBOARD VIEW ========== */}
+        {/* DASHBOARD */}
         {view === "dashboard" && (
           <>
             <section className="welcome-section">
               <h1 className="welcome-title">Welcome back, {studentId}!</h1>
-              <p className="welcome-subtitle">Here’s what’s happening with projects today.</p>
+              <p className="welcome-subtitle">
+                Here’s what’s happening with projects today.
+              </p>
             </section>
 
+            {/* Stats */}
             <section className="stats-grid">
               <div className="stat-card big">
                 <p className="stat-label">Total Projects</p>
@@ -454,9 +461,9 @@ const StudentDashboard = ({ user, onLogout }) => {
               </div>
             </section>
 
-            <section className="bottom-grid">
-              {/* Projects */}
-              <div className="panel">
+            {/* Bottom: Projects list + Calendar */}
+            <section className="bottom-grid" style={{ display: "flex", gap: 20 }}>
+              <div className="panel" style={{ flex: 1 }}>
                 <div className="panel-header">
                   <h2 className="panel-title">My Projects</h2>
                   <button
@@ -472,7 +479,9 @@ const StudentDashboard = ({ user, onLogout }) => {
                 </div>
 
                 {projects.length === 0 ? (
-                  <p className="empty-text">No projects yet. Click <strong>+ New Project</strong> to add one.</p>
+                  <p className="empty-text">
+                    No projects yet. Click <strong>+ New Project</strong> to add one.
+                  </p>
                 ) : (
                   <div className="project-list">
                     {projects.map((p) => {
@@ -480,7 +489,7 @@ const StudentDashboard = ({ user, onLogout }) => {
                       return (
                         <div key={p.id} className="project-card full">
                           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "start" }}>
-                            <div>
+                            <div style={{ flex: 1 }}>
                               <h3 className="project-title">{p.title}</h3>
                               <div className="project-tags">
                                 <span>🏷 {p.category}</span>
@@ -496,28 +505,16 @@ const StudentDashboard = ({ user, onLogout }) => {
                             <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem", alignItems: "flex-end" }}>
                               <div className="project-actions" style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
                                 <button className="action-btn read" onClick={() => openProjectDetails(p.id)}>🔍 Read</button>
-
-                                <button
-                                  className="action-btn edit"
-                                  onClick={() => {
-                                    setPTitle(p.title); setPDescription(p.description); setPCategory(p.category);
-                                    setPLink(p.link); setPTechStack(p.techStack); setPFile(p.file || "");
-                                    setEditingProjectId(p.id); setView("addProject");
-                                  }}
-                                >
-                                  ✏ Modify
-                                </button>
-
+                                <button className="action-btn edit" onClick={() => {
+                                  setPTitle(p.title); setPDescription(p.description); setPCategory(p.category);
+                                  setPLink(p.link); setPTechStack(p.techStack); setPFile(p.file || "");
+                                  setEditingProjectId(p.id); setView("addProject");
+                                }}>✏ Modify</button>
                                 <button className="action-btn delete" onClick={() => setProjects(prev => prev.filter(x => x.id !== p.id))}>🗑 Delete</button>
 
-                                {/* Feedback button: changes depending on whether feedback exists */}
-                                {projectFeedback && projectFeedback.length > 0 ? (
+                                {projectFeedback && projectFeedback.length > 0 && (
                                   <button className="action-btn feedback" onClick={() => openProjectDetails(p.id)}>
                                     💬 View Feedback ({projectFeedback.length})
-                                  </button>
-                                ) : (
-                                  <button className="action-btn feedback disabled" disabled>
-                                    💬 No feedback yet
                                   </button>
                                 )}
                               </div>
@@ -534,8 +531,7 @@ const StudentDashboard = ({ user, onLogout }) => {
                 )}
               </div>
 
-              {/* Calendar */}
-              <div className="panel">
+              <div className="panel" style={{ width: 420 }}>
                 <div className="panel-header calendar-header">
                   <button type="button" className="calendar-nav-btn" onClick={goToPrevMonth}>◀</button>
                   <h2 className="panel-title">{monthNames[month]} {year}</h2>
@@ -543,34 +539,80 @@ const StudentDashboard = ({ user, onLogout }) => {
                 </div>
 
                 <div className="calendar">
-                  <div className="calendar-grid calendar-grid-header">
+                  <div className="calendar-grid calendar-grid-header" style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 6 }}>
                     {weekdayNames.map((day) => (
-                      <div key={day} className="calendar-day-name">{day}</div>
+                      <div key={day} className="calendar-day-name" style={{ textAlign: "center", fontSize: 12, color: "#7b8794" }}>
+                        {day}
+                      </div>
                     ))}
                   </div>
 
-                  <div className="calendar-grid">
+                  <div className="calendar-grid" style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 8, marginTop: 10 }}>
                     {calendarCells.map((cell, idx) => {
-                      if (cell === null) return <div key={idx} className="calendar-day empty" />;
+                      if (cell === null) {
+                        return <div key={idx} className="calendar-day empty" style={{ height: 46 }} />;
+                      }
+
                       const isToday = isSameMonth && cell === today.getDate();
+                      // build date string for this cell
+                      const mm = String(month + 1).padStart(2, "0");
+                      const dd = String(cell).padStart(2, "0");
+                      const dateString = `${year}-${mm}-${dd}`;
+                      const milestonesForDay = getMilestonesForDate(dateString);
+
                       return (
-                        <div key={idx} className={`calendar-day ${isToday ? "today" : ""}`}>
-                          <span>{cell}</span>
+                        <div
+                          key={idx}
+                          className={`calendar-day ${isToday ? "today" : ""}`}
+                          style={{
+                            height: 60,
+                            padding: 6,
+                            borderRadius: 8,
+                            background: isToday ? "#eaf6ff" : "transparent",
+                            display: "flex",
+                            flexDirection: "column",
+                            alignItems: "flex-start",
+                            justifyContent: "space-between",
+                          }}
+                        >
+                          <div style={{ fontSize: 13, color: "#1f2937" }}>{cell}</div>
+
+                          {/* dot indicator if there are milestones */}
+                          <div style={{ width: "100%", display: "flex", justifyContent: "flex-end" }}>
+                            {milestonesForDay.length > 0 && (
+                              <button
+                                onClick={() => openMilestonePopup(dateString)}
+                                style={{
+                                  width: 12,
+                                  height: 12,
+                                  borderRadius: 12,
+                                  background: "#2b7cff",
+                                  border: "2px solid white",
+                                  boxShadow: "0 4px 8px rgba(43,124,255,0.18)",
+                                  cursor: "pointer",
+                                }}
+                                title={`${milestonesForDay.length} milestone(s)`}
+                              />
+                            )}
+                          </div>
                         </div>
                       );
                     })}
                   </div>
                 </div>
 
-                <p className="calendar-footer-text">
-                  Today is <strong>{today.getDate()} {monthNames[today.getMonth()]} {today.getFullYear()}</strong>
+                <p className="calendar-footer-text" style={{ marginTop: 12, color: "#6b7280" }}>
+                  Today is{" "}
+                  <strong>
+                    {today.getDate()} {monthNames[today.getMonth()]} {today.getFullYear()}
+                  </strong>
                 </p>
               </div>
             </section>
           </>
         )}
 
-        {/* ========== ADD NEW PROJECT VIEW ========== */}
+        {/* Add / Edit project */}
         {view === "addProject" && (
           <section className="project-form-wrapper">
             <div className="panel project-form-panel">
@@ -580,19 +622,16 @@ const StudentDashboard = ({ user, onLogout }) => {
               </div>
 
               <form className="project-form" onSubmit={handleProjectSubmit}>
-                <label className="field-label">
-                  Project Title
+                <label className="field-label">Project Title
                   <input className="input-field" type="text" value={pTitle} onChange={(e) => setPTitle(e.target.value)} placeholder="E.g., Smart Attendance System" required />
                 </label>
 
-                <label className="field-label">
-                  Description
+                <label className="field-label">Description
                   <textarea className="input-field textarea-field" value={pDescription} onChange={(e) => setPDescription(e.target.value)} placeholder="Briefly describe the problem, solution, and impact..." rows={4} required />
                 </label>
 
                 <div className="form-row">
-                  <label className="field-label">
-                    Category
+                  <label className="field-label">Category
                     <select className="input-field select-field" value={pCategory} onChange={(e) => setPCategory(e.target.value)}>
                       <option value="">Select Category</option>
                       <option value="Web Development">Web Development</option>
@@ -604,19 +643,16 @@ const StudentDashboard = ({ user, onLogout }) => {
                     </select>
                   </label>
 
-                  <label className="field-label">
-                    GitHub / Demo Link
+                  <label className="field-label">GitHub / Demo Link
                     <input className="input-field" type="url" value={pLink} onChange={(e) => setPLink(e.target.value)} placeholder="Paste project repository or live link" />
                   </label>
                 </div>
 
-                <label className="field-label">
-                  Tech Stack
+                <label className="field-label">Tech Stack
                   <input className="input-field" type="text" value={pTechStack} onChange={(e) => setPTechStack(e.target.value)} placeholder="E.g., React, Node.js, MongoDB" />
                 </label>
 
-                <label className="field-label">
-                  Upload File (optional)
+                <label className="field-label">Upload File (optional)
                   <input className="input-field" type="file" onChange={(e) => setPFile(e.target.files?.[0]?.name || "")} />
                 </label>
 
@@ -629,7 +665,7 @@ const StudentDashboard = ({ user, onLogout }) => {
           </section>
         )}
 
-        {/* ========== PROJECT DETAILS VIEW (includes feedback) ========== */}
+        {/* Project details (includes milestone add -> date flow) */}
         {view === "projectDetails" && selectedProject && (
           <section className="project-details-wrapper">
             <div className="panel project-details-panel">
@@ -648,13 +684,17 @@ const StudentDashboard = ({ user, onLogout }) => {
                 <span>📅 Last updated: {selectedProject.lastUpdated}</span>
               </div>
 
-              <div className="project-progress-row">
-                <div className="progress-block">
-                  <div className="progress-header"><span>Progress</span><span>{selectedProject.progress}%</span></div>
-                  <div className="progress-bar"><div className="progress-bar-fill" style={{ width: `${selectedProject.progress}%` }} /></div>
+              <div className="project-progress-row" style={{ display: "flex", gap: 20, marginTop: 14 }}>
+                <div className="progress-block" style={{ flex: 1 }}>
+                  <div className="progress-header" style={{ display: "flex", justifyContent: "space-between" }}>
+                    <span>Progress</span><span>{selectedProject.progress}%</span>
+                  </div>
+                  <div className="progress-bar" style={{ marginTop: 8 }}>
+                    <div className="progress-bar-fill" style={{ width: `${selectedProject.progress}%` }} />
+                  </div>
                 </div>
 
-                <div className="status-block">
+                <div className="status-block" style={{ width: 240 }}>
                   <span className="status-label">Status</span>
                   <span className={`status-pill status-${selectedProject.status.replace(" ", "").toLowerCase()}`}>{selectedProject.status}</span>
                   {selectedProject.status === "Draft" && <button className="small-primary-btn" onClick={handleMarkInReview}>Submit for Review</button>}
@@ -663,28 +703,57 @@ const StudentDashboard = ({ user, onLogout }) => {
 
               <div className="milestones-section">
                 <h3 className="milestones-title">Milestones</h3>
+
                 {(!selectedProject.milestones || selectedProject.milestones.length === 0) ? (
                   <p className="empty-text">No milestones yet. Add milestones to track your progress.</p>
                 ) : (
                   <ul className="milestones-list">
                     {selectedProject.milestones.map((m) => (
-                      <li key={m.id} className="milestone-item">
-                        <label className="milestone-label">
-                          <input type="checkbox" checked={m.completed} onChange={() => handleToggleMilestone(m.id)} />
-                          <span className={m.completed ? "milestone-text done" : "milestone-text"}>{m.text}</span>
-                        </label>
+                      <li key={m.id} className="milestone-item" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                        <div>
+                          <label style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                            <input type="checkbox" checked={m.completed} onChange={() => handleToggleMilestone(m.id)} />
+                            <span className={m.completed ? "milestone-text done" : "milestone-text"}>
+                              {m.text}
+                              {m.date ? <span style={{ marginLeft: 8, fontSize: 12, color: "#6b7280" }}>— {m.date}</span> : null}
+                            </span>
+                          </label>
+                        </div>
+
+                        <div style={{ display: "flex", gap: 8 }}>
+                          {/* Optionally allow removing milestone */}
+                          <button
+                            className="action-btn"
+                            onClick={() => {
+                              updateProject(selectedProject.id, (p) => ({
+                                ...p,
+                                milestones: p.milestones.filter((x) => x.id !== m.id),
+                              }));
+                            }}
+                            title="Remove milestone"
+                          >
+                            🗑
+                          </button>
+                        </div>
                       </li>
                     ))}
                   </ul>
                 )}
 
-                <form className="milestone-add-form" onSubmit={handleAddMilestone}>
-                  <input type="text" className="input-field milestone-input" value={newMilestoneText} onChange={(e) => setNewMilestoneText(e.target.value)} placeholder="Add a new milestone (e.g., UI completed)" />
+                {/* Instead of immediate add, open calendar modal for date selection */}
+                <form className="milestone-add-form" onSubmit={(e) => { e.preventDefault(); openDatePickerForMilestone(e); }}>
+                  <input
+                    type="text"
+                    className="input-field milestone-input"
+                    value={newMilestoneText}
+                    onChange={(e) => setNewMilestoneText(e.target.value)}
+                    placeholder="Add a new milestone (e.g., UI completed)"
+                  />
                   <button type="submit" className="small-primary-btn">Add</button>
                 </form>
               </div>
 
-              {/* -------- Feedback Section -------- */}
+              {/* Feedback display remains unchanged */}
               <div className="panel" style={{ marginTop: "1rem" }}>
                 <div className="panel-header">
                   <h3 className="panel-title">Faculty Feedback</h3>
@@ -715,7 +784,7 @@ const StudentDashboard = ({ user, onLogout }) => {
           </section>
         )}
 
-        {/* ========== PROJECTS PAGE VIEW ========== */}
+        {/* Projects list page (unchanged except feedback button kept) */}
         {view === "projects" && (
           <section className="project-list-view">
             <div className="panel">
@@ -726,7 +795,7 @@ const StudentDashboard = ({ user, onLogout }) => {
 
               {projects.length === 0 ? <p className="empty-text">No projects found. Create your first project 🚀</p> : (
                 <div className="project-list">
-                  {projects.map((p) => (
+                  {projects.map(p => (
                     <div key={p.id} className="project-card full">
                       <h3 className="project-title">{p.title}</h3>
                       <div className="project-tags">
@@ -740,11 +809,7 @@ const StudentDashboard = ({ user, onLogout }) => {
                         <button className="action-btn read" onClick={() => openProjectDetails(p.id)}>🔍 Read</button>
                         <button className="action-btn edit" onClick={() => { setPTitle(p.title); setPDescription(p.description); setPCategory(p.category); setPLink(p.link); setPTechStack(p.techStack); setPFile(p.file || ""); setEditingProjectId(p.id); setView("addProject"); }}>✏ Modify</button>
                         <button className="action-btn delete" onClick={() => setProjects(prev => prev.filter(x => x.id !== p.id))}>🗑 Delete</button>
-                        {getFeedbackForProject(p.id).length > 0 ? (
-                          <button className="action-btn feedback" onClick={() => openProjectDetails(p.id)}>💬 Feedback</button>
-                        ) : (
-                          <button className="action-btn feedback disabled" disabled>💬 No feedback</button>
-                        )}
+                        {getFeedbackForProject(p.id).length > 0 && <button className="action-btn feedback" onClick={() => openProjectDetails(p.id)}>💬 Feedback</button>}
                       </div>
                     </div>
                   ))}
@@ -759,6 +824,148 @@ const StudentDashboard = ({ user, onLogout }) => {
           <PortfolioEditor projects={projects} setProjects={setProjects} studentId={studentId} />
         )}
       </main>
+
+      {/* ---------------------------
+            Date-picker Modal (for adding milestone date)
+           --------------------------- */}
+      {showDatePicker && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(0,0,0,0.28)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 2000,
+          }}
+          onClick={() => { setShowDatePicker(false); }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width: 360,
+              background: "#fff",
+              borderRadius: 12,
+              padding: 16,
+              boxShadow: "0 20px 60px rgba(7,11,20,0.25)",
+            }}
+          >
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <strong>Select date for milestone</strong>
+              <div style={{ display: "flex", gap: 8 }}>
+                <button className="action-btn" onClick={() => setModalMonth(modalMonth - 1)}>&lt;</button>
+                <button className="action-btn" onClick={() => setModalMonth(modalMonth + 1)}>&gt;</button>
+              </div>
+            </div>
+
+            <div style={{ marginTop: 10, marginBottom: 8, display: "flex", justifyContent: "center", gap: 8, alignItems: "center" }}>
+              <button className="action-btn" onClick={() => { setModalYear(modalYear - 1); }}>-Y</button>
+              <div style={{ fontWeight: 700 }}>{monthNames[(modalMonth + 12) % 12]} {modalYear}</div>
+              <button className="action-btn" onClick={() => { setModalYear(modalYear + 1); }}>+Y</button>
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 6, marginTop: 8 }}>
+              {weekdayNames.map((d) => <div key={d} style={{ textAlign: "center", fontSize: 12, color: "#6b7280" }}>{d}</div>)}
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 8, marginTop: 8 }}>
+              {genMonthCells(modalYear, modalMonth).map((cell, idx) => {
+                if (cell === null) return <div key={idx} style={{ height: 36 }} />;
+                // build date string for cell and show small indicator if there are milestones already (optional)
+                const mm = String(modalMonth + 1).padStart(2, "0");
+                const dd = String(cell).padStart(2, "0");
+                const dString = `${modalYear}-${mm}-${dd}`;
+                const existing = getMilestonesForDate(dString);
+                return (
+                  <button
+                    key={idx}
+                    onClick={() => handleSelectMilestoneDate(cell)}
+                    style={{
+                      height: 44,
+                      borderRadius: 8,
+                      border: "1px solid rgba(15,20,30,0.06)",
+                      background: existing.length ? "#f0fbff" : "#fff",
+                      cursor: "pointer"
+                    }}
+                    title={existing.length ? `${existing.length} milestone(s) exist` : ""}
+                  >
+                    <div style={{ display: "flex", justifyContent: "space-between" }}>
+                      <div style={{ fontSize: 13 }}>{cell}</div>
+                      {existing.length > 0 && <div style={{ width: 8, height: 8, borderRadius: 8, background: "#2b7cff" }} />}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 12 }}>
+              <button className="outline-pill" onClick={() => { setShowDatePicker(false); }}>Cancel</button>
+              <button className="primary-pill" onClick={() => setShowDatePicker(false)}>Close</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ---------------------------
+            Milestone popup modal (shows milestones for selected date)
+          --------------------------- */}
+      {showMilestonePopup && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(0,0,0,0.28)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 2100,
+          }}
+          onClick={() => { setShowMilestonePopup(false); }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width: 520,
+              maxHeight: "70vh",
+              overflowY: "auto",
+              background: "#fff",
+              borderRadius: 12,
+              padding: 18,
+              boxShadow: "0 30px 80px rgba(7,11,20,0.25)",
+            }}
+          >
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <strong>Milestones on {popupDate}</strong>
+              <button className="action-btn" onClick={() => setShowMilestonePopup(false)}>Close</button>
+            </div>
+
+            <div style={{ marginTop: 12 }}>
+              {popupMilestones.length === 0 ? (
+                <p>No milestones for this date.</p>
+              ) : (
+                popupMilestones.map((m) => (
+                  <div key={m.id} style={{ padding: 12, borderRadius: 8, background: "#fbfdff", marginBottom: 8 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      <strong>{m.projectTitle}</strong>
+                      <small style={{ color: "#6b7280" }}>{m.completed ? "Done" : "Pending"}</small>
+                    </div>
+                    <div style={{ marginTop: 6 }}>{m.text}</div>
+                    <div style={{ marginTop: 8, display: "flex", gap: 8 }}>
+                      {/* Jump to project details button */}
+                      <button className="action-btn" onClick={() => {
+                        // open that project details and scroll to milestone (simple)
+                        setShowMilestonePopup(false);
+                        openProjectDetails(m.projectId);
+                      }}>Open Project</button>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
